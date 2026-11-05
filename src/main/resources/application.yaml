@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: pedidos-service
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+proveedor-logistico:
+  base-url: ${PROVEEDOR_LOGISTICO_URL:http://localhost:8089}
+  token: ${PROVEEDOR_LOGISTICO_TOKEN}
+  connect-timeout: 2s
+  read-timeout: 6s
+  reintentos:
+    max: 2
+    espera: 500ms
+    jitter: 100ms

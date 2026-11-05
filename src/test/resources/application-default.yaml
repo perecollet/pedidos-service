@@ -1,0 +1,3 @@
+proveedor-logistico:
+  base-url: http://localhost:1
+  token: token-de-test

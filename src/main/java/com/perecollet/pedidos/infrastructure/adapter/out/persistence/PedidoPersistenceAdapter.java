@@ -1,12 +1,14 @@
 package com.perecollet.pedidos.infrastructure.adapter.out.persistence;
 
 import com.perecollet.pedidos.application.port.out.PedidoRepositoryPort;
+import com.perecollet.pedidos.domain.model.EstadoPedido;
 import com.perecollet.pedidos.domain.model.Pedido;
 import com.perecollet.pedidos.domain.model.PedidoId;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
+import java.util.Set;
 
 @Repository
 public class PedidoPersistenceAdapter implements PedidoRepositoryPort {
@@ -27,5 +29,13 @@ public class PedidoPersistenceAdapter implements PedidoRepositoryPort {
     public Optional<Pedido> buscarPorId(PedidoId id) {
         return pedidoJpaRepository.findById(id.valor())
                 .map(PedidoMapper::toDomain);
+    }
+
+    @Override
+    @Transactional
+    public boolean reservarParaConfirmacion(PedidoId id){
+        int filas = pedidoJpaRepository.cambiarEstadoSi(
+                id.valor(), EstadoPedido.CONFIRMANDO, Set.of(EstadoPedido.CREADO, EstadoPedido.ERROR_ENVIO));
+        return filas == 1;
     }
 }

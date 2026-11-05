@@ -20,6 +20,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static com.perecollet.pedidos.infrastructure.adapter.out.persistence.DatosSeed.CLIENTE_ANA;
 import static com.perecollet.pedidos.infrastructure.adapter.out.persistence.DatosSeed.RATON;
@@ -60,6 +66,17 @@ class PedidoPersistenceAdapterTest {
 
     private Pedido pedidoCreado() {
         return Pedido.crear(CLIENTE_ANA, CODIGO_POSTAL, lineasDelCatalogo(), FECHA);
+    }
+
+    private Pedido pedidoGuardadoEnEstado(EstadoPedido estado) {
+        Pedido pedido = Pedido.reconstituir(PedidoId.nuevo(), CLIENTE_ANA, CODIGO_POSTAL, lineasDelCatalogo(),
+                FECHA, estado, estado == EstadoPedido.CONFIRMADO ? eur("7.95") : null);
+        adapter.guardar(pedido);
+        return pedido;
+    }
+
+    private EstadoPedido estadoEnBaseDeDatos(PedidoId id) {
+        return adapter.buscarPorId(id).orElseThrow().estado();
     }
 
     private Pedido pedidoConfirmado(PedidoId id) {
@@ -113,7 +130,6 @@ class PedidoPersistenceAdapterTest {
 
     @Test
     void givenPedidoConfirmado_whenGuardar_thenGuardaLosImportesEnSusColumnas() {
-        // Detecta un cruce de parámetros BigDecimal en el constructor de PedidoEntity
         Pedido original = pedidoConfirmado(PedidoId.nuevo());
 
         adapter.guardar(original);
@@ -137,6 +153,79 @@ class PedidoPersistenceAdapterTest {
         assertThat(leido.estado()).isEqualTo(EstadoPedido.CONFIRMADO);
         assertThat(leido.costeEnvio()).contains(eur("7.95"));
         assertThat(leido.lineas()).hasSize(2);
+    }
+
+    // --- Reserva para confirmación (UPDATE condicional) ---
+
+    @Test
+    void givenPedidoCreado_whenReservarParaConfirmacion_thenDevuelveTrueYPasaAConfirmando() {
+        Pedido pedido = pedidoGuardadoEnEstado(EstadoPedido.CREADO);
+
+        boolean reservado = adapter.reservarParaConfirmacion(pedido.id());
+
+        assertThat(reservado).isTrue();
+        assertThat(estadoEnBaseDeDatos(pedido.id())).isEqualTo(EstadoPedido.CONFIRMANDO);
+    }
+
+    @Test
+    void givenPedidoEnErrorEnvio_whenReservarParaConfirmacion_thenDevuelveTrueYPasaAConfirmando() {
+        Pedido pedido = pedidoGuardadoEnEstado(EstadoPedido.ERROR_ENVIO);
+
+        boolean reservado = adapter.reservarParaConfirmacion(pedido.id());
+
+        assertThat(reservado).isTrue();
+        assertThat(estadoEnBaseDeDatos(pedido.id())).isEqualTo(EstadoPedido.CONFIRMANDO);
+    }
+
+    @Test
+    void givenPedidoYaConfirmando_whenReservarParaConfirmacion_thenDevuelveFalseYNoCambia() {
+        Pedido pedido = pedidoGuardadoEnEstado(EstadoPedido.CONFIRMANDO);
+
+        boolean reservado = adapter.reservarParaConfirmacion(pedido.id());
+
+        assertThat(reservado).isFalse();
+        assertThat(estadoEnBaseDeDatos(pedido.id())).isEqualTo(EstadoPedido.CONFIRMANDO);
+    }
+
+    @Test
+    void givenPedidoConfirmado_whenReservarParaConfirmacion_thenDevuelveFalseYNoCambia() {
+        Pedido pedido = pedidoGuardadoEnEstado(EstadoPedido.CONFIRMADO);
+
+        boolean reservado = adapter.reservarParaConfirmacion(pedido.id());
+
+        assertThat(reservado).isFalse();
+        assertThat(estadoEnBaseDeDatos(pedido.id())).isEqualTo(EstadoPedido.CONFIRMADO);
+    }
+
+    @Test
+    void givenPedidoInexistente_whenReservarParaConfirmacion_thenDevuelveFalse() {
+        assertThat(adapter.reservarParaConfirmacion(PedidoId.nuevo())).isFalse();
+    }
+
+    @Test
+    void givenDosHilosALaVez_whenReservarElMismoPedido_thenSoloUnoLoConsigue() throws Exception {
+        Pedido pedido = pedidoGuardadoEnEstado(EstadoPedido.CREADO);
+        CountDownLatch salida = new CountDownLatch(1);
+        Callable<Boolean> reservar = () -> {
+            salida.await();                      // los dos hilos esperan aquí y salen a la vez
+            return adapter.reservarParaConfirmacion(pedido.id());
+        };
+
+        ExecutorService hilos = Executors.newFixedThreadPool(2);
+        try {
+            Future<Boolean> primero = hilos.submit(reservar);
+            Future<Boolean> segundo = hilos.submit(reservar);
+            salida.countDown();
+
+            List<Boolean> resultados = List.of(
+                    primero.get(10, TimeUnit.SECONDS),
+                    segundo.get(10, TimeUnit.SECONDS));
+
+            assertThat(resultados).containsExactlyInAnyOrder(true, false);
+        } finally {
+            hilos.shutdownNow();
+        }
+        assertThat(estadoEnBaseDeDatos(pedido.id())).isEqualTo(EstadoPedido.CONFIRMANDO);
     }
 
     // --- Búsqueda ---

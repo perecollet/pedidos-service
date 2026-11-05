@@ -10,4 +10,6 @@ public interface PedidoRepositoryPort {
     void guardar(Pedido pedido);
 
     Optional<Pedido> buscarPorId(PedidoId id);
+
+    boolean reservarParaConfirmacion(PedidoId id);
 }

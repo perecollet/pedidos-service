@@ -11,7 +11,9 @@ import com.perecollet.pedidos.domain.model.Dinero;
 import com.perecollet.pedidos.domain.model.EstadoPedido;
 import com.perecollet.pedidos.domain.model.Pedido;
 import com.perecollet.pedidos.domain.model.PedidoId;
+import org.springframework.stereotype.Service;
 
+@Service
 public class ConfirmarPedidoService implements ConfirmarPedidoUseCase {
 
     private final PedidoRepositoryPort pedidoRepositoryPort;

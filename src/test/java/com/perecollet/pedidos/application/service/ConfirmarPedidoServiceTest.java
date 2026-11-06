@@ -36,8 +36,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -216,5 +218,64 @@ class ConfirmarPedidoServiceTest {
         Pedido guardado = pedidoGuardado();
         assertThat(guardado.estado()).isEqualTo(EstadoPedido.ERROR_ENVIO);
         assertThat(guardado.costeEnvio()).isEmpty();
+    }
+
+    // --- Fallos inesperados: el pedido no se queda bloqueado en CONFIRMANDO ---
+
+    @Test
+    void givenErrorInesperadoDelProveedor_whenConfirmar_thenGuardaErrorEnvioYPropagaLaExcepcion() {
+        dadoPedidoReservado();
+        IllegalStateException fallo = new IllegalStateException("fallo inesperado");
+        when(proveedor.obtenerTarifa(anyString(), any(), anyInt())).thenThrow(fallo);
+
+        assertThatThrownBy(() -> servicio.confirmar(PEDIDO_ID)).isSameAs(fallo);
+
+        assertThat(pedidoGuardado().estado()).isEqualTo(EstadoPedido.ERROR_ENVIO);
+    }
+
+    @Test
+    void givenFalloAlGuardarElPedidoConfirmado_whenConfirmar_thenReleeElPedidoYGuardaErrorEnvio() {
+        // Tras el fallo, el pedido en memoria ya está CONFIRMADO, pero en BD sigue en CONFIRMANDO
+        when(pedidos.reservarParaConfirmacion(PEDIDO_ID)).thenReturn(true);
+        when(pedidos.buscarPorId(PEDIDO_ID)).thenReturn(
+                Optional.of(pedidoEnEstado(EstadoPedido.CONFIRMANDO)),
+                Optional.of(pedidoEnEstado(EstadoPedido.CONFIRMANDO)));
+        when(proveedor.obtenerTarifa(anyString(), any(), anyInt())).thenReturn(eur("7.95"));
+        IllegalStateException fallo = new IllegalStateException("fallo al guardar");
+        doThrow(fallo).doNothing().when(pedidos).guardar(any());
+
+        assertThatThrownBy(() -> servicio.confirmar(PEDIDO_ID)).isSameAs(fallo);
+
+        ArgumentCaptor<Pedido> guardados = ArgumentCaptor.forClass(Pedido.class);
+        verify(pedidos, times(2)).guardar(guardados.capture());
+        assertThat(guardados.getValue().estado()).isEqualTo(EstadoPedido.ERROR_ENVIO);
+        assertThat(guardados.getValue().costeEnvio()).isEmpty();
+    }
+
+    @Test
+    void givenFalloAlLeerElPedidoReservado_whenConfirmar_thenGuardaErrorEnvioSinLlamarAlProveedor() {
+        when(pedidos.reservarParaConfirmacion(PEDIDO_ID)).thenReturn(true);
+        IllegalStateException fallo = new IllegalStateException("fallo al leer");
+        when(pedidos.buscarPorId(PEDIDO_ID))
+                .thenThrow(fallo)
+                .thenReturn(Optional.of(pedidoEnEstado(EstadoPedido.CONFIRMANDO)));
+
+        assertThatThrownBy(() -> servicio.confirmar(PEDIDO_ID)).isSameAs(fallo);
+
+        assertThat(pedidoGuardado().estado()).isEqualTo(EstadoPedido.ERROR_ENVIO);
+        verifyNoInteractions(proveedor);
+    }
+
+    @Test
+    void givenFalloAlGuardarErrorEnvio_whenConfirmar_thenPropagaLaCausaOriginalConElFalloComoSuprimido() {
+        dadoPedidoReservado();
+        ProveedorNoDisponibleException fallo = new ProveedorNoDisponibleException("503 del proveedor");
+        when(proveedor.obtenerTarifa(anyString(), any(), anyInt())).thenThrow(fallo);
+        IllegalStateException falloAlGuardar = new IllegalStateException("base de datos caída");
+        doThrow(falloAlGuardar).when(pedidos).guardar(any());
+
+        assertThatThrownBy(() -> servicio.confirmar(PEDIDO_ID))
+                .isSameAs(fallo)
+                .hasSuppressedException(falloAlGuardar);
     }
 }

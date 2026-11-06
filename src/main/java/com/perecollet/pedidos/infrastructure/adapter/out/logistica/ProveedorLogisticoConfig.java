@@ -23,6 +23,8 @@ public class ProveedorLogisticoConfig {
                 .build();
         JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
         factory.setReadTimeout(props.readTimeout());
+        // Con gzip, un timeout leyendo el cuerpo salta como NPE del Inflater en vez de IOException
+        factory.enableCompression(false);
 
         return RestClient.builder()
                 .baseUrl(props.baseUrl())

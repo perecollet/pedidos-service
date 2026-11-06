@@ -8,6 +8,7 @@ import com.perecollet.pedidos.application.exception.ProveedorNoDisponibleExcepti
 import com.perecollet.pedidos.application.exception.ProveedorTimeoutException;
 import com.perecollet.pedidos.application.port.out.ProveedorLogisticoPort;
 import com.perecollet.pedidos.domain.model.Dinero;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -15,10 +16,15 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.web.client.RestClient;
 
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.Currency;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
@@ -157,6 +163,45 @@ class ProveedorLogisticoHttpAdapterTest {
     }
 
     @Test
+    void givenCuerpoQueTardaMasQueElTimeout_whenObtenerTarifa_thenReintentaYLanzaNoDisponible() {
+        // Las cabeceras llegan a tiempo y se atasca el cuerpo: el cliente lo notifica como IOException genérica
+        // ("subscription cancelled"), no como HttpTimeoutException, así que no se distingue de un corte de conexión
+        wiremock.stubFor(post(TARIFAS).willReturn(okJson(RESPUESTA_OK).withChunkedDribbleDelay(8, 2_000)));
+
+        assertThatThrownBy(this::pedirTarifa)
+                .isExactlyInstanceOf(ProveedorNoDisponibleException.class);
+
+        verificarLlamadas(3);
+    }
+
+    @Test
+    void givenConexionCortadaLeyendoElCuerpo_whenObtenerTarifa_thenLanzaNoDisponible() throws IOException {
+        // WireMock no permite cortar a mitad de cuerpo: se anuncian 1000 bytes y se cierra tras enviar unos pocos
+        HttpServer servidor = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        servidor.createContext(TARIFAS, intercambio -> {
+            intercambio.getRequestBody().readAllBytes();
+            intercambio.getResponseHeaders().add("Content-Type", "application/json");
+            intercambio.sendResponseHeaders(200, 1_000);
+            intercambio.getResponseBody().write("{ \"coste\":".getBytes(StandardCharsets.UTF_8));
+            intercambio.getResponseBody().flush();
+            intercambio.close();
+        });
+        servidor.start();
+        try {
+            ProveedorLogisticoHttpAdapter sinReintentos = new ProveedorLogisticoHttpAdapter(RestClient.builder()
+                    .baseUrl("http://localhost:" + servidor.getAddress().getPort())
+                    .requestFactory(new JdkClientHttpRequestFactory())
+                    .build());
+            BigDecimal peso = new BigDecimal("3.5");
+
+            assertThatThrownBy(() -> sinReintentos.obtenerTarifa("43840", peso, 2))
+                    .isExactlyInstanceOf(ProveedorNoDisponibleException.class);
+        } finally {
+            servidor.stop(0);
+        }
+    }
+
+    @Test
     void givenConexionCortada_whenObtenerTarifa_thenReintentaYLanzaNoDisponible() {
         wiremock.stubFor(post(TARIFAS).willReturn(aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
 
@@ -221,6 +266,17 @@ class ProveedorLogisticoHttpAdapterTest {
         Dinero tarifa = pedirTarifa();
 
         assertThat(tarifa).isEqualTo(Dinero.euros(new BigDecimal("9999999999.99")));
+    }
+
+    @Test
+    void givenJsonRoto_whenObtenerTarifa_thenLanzaErrorSinReintentar() {
+        // Un error de parseo no es un fallo de red, aunque se detecte al leer el cuerpo
+        wiremock.stubFor(post(TARIFAS).willReturn(okJson("{ \"coste\": ")));
+
+        assertThatThrownBy(this::pedirTarifa)
+                .isExactlyInstanceOf(ProveedorLogisticoException.class);
+
+        verificarLlamadas(1);
     }
 
     @Test

@@ -13,6 +13,7 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.http.HttpTimeoutException;
 import java.util.Currency;
@@ -57,9 +58,20 @@ public class ProveedorLogisticoHttpAdapter implements ProveedorLogisticoPort {
             }
             throw new ProveedorNoDisponibleException("No se pudo conectar con el proveedor", e);
         } catch (RestClientException e) {
-            throw new ProveedorLogisticoException("Respuesta ilegible del proveedor", e);
+            throw traducirFalloDeLectura(e);
         }
         return aDinero(respuesta);
+    }
+
+    private static ProveedorLogisticoException traducirFalloDeLectura(RestClientException e) {
+        Throwable causa = e.getMostSpecificCause();
+        if (causa instanceof HttpTimeoutException) {
+            return new ProveedorTimeoutException("El proveedor no respondió a tiempo", e);
+        }
+        if (causa instanceof IOException) {
+            return new ProveedorNoDisponibleException("Se interrumpió la lectura de la respuesta del proveedor", e);
+        }
+        return new ProveedorLogisticoException("Respuesta ilegible del proveedor", e);
     }
 
     private static Dinero aDinero(TarifaResponse respuesta) {

@@ -8,7 +8,6 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
-import java.util.Set;
 
 @Repository
 public class PedidoPersistenceAdapter implements PedidoRepositoryPort {
@@ -35,7 +34,7 @@ public class PedidoPersistenceAdapter implements PedidoRepositoryPort {
     @Transactional
     public boolean reservarParaConfirmacion(PedidoId id){
         int filas = pedidoJpaRepository.cambiarEstadoSi(
-                id.valor(), EstadoPedido.CONFIRMANDO, Set.of(EstadoPedido.CREADO, EstadoPedido.ERROR_ENVIO));
+                id.valor(), EstadoPedido.CONFIRMANDO, EstadoPedido.confirmables());
         return filas == 1;
     }
 }

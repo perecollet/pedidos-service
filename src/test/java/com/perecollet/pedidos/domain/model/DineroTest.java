@@ -2,6 +2,8 @@ package com.perecollet.pedidos.domain.model;
 
 import com.perecollet.pedidos.domain.exception.MonedaNoCoincideException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.math.BigDecimal;
 import java.util.Currency;
@@ -46,6 +48,24 @@ class DineroTest {
 
         assertThat(cero.importe()).isEqualTo(new BigDecimal("0.00"));
         assertThat(cero.moneda()).isEqualTo(EUR);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "7.945, EUR, 7.94",     // empate: redondea al par
+            "7.955, EUR, 7.96",     // empate: redondea al par
+            "7.946, EUR, 7.95",     // sin empate
+            "1234.5, JPY, 1234",    // 0 decimales
+            "1235.5, JPY, 1236",    // 0 decimales
+            "1.2345, KWD, 1.234",   // 3 decimales
+            "1.2355, KWD, 1.236"    // 3 decimales
+    })
+    void givenImporteConMasDecimalesQueLaMoneda_whenOf_thenRedondeaHalfEvenALaEscalaDeLaMoneda(
+            String importe, String moneda, String esperado) {
+        Dinero dinero = Dinero.of(new BigDecimal(importe), Currency.getInstance(moneda));
+
+        // isEqualTo y no compareTo: la escala también forma parte de lo que se comprueba
+        assertThat(dinero.importe()).isEqualTo(new BigDecimal(esperado));
     }
 
     @Test

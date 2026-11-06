@@ -16,9 +16,13 @@ import org.springframework.web.client.RestClientException;
 import java.math.BigDecimal;
 import java.net.http.HttpTimeoutException;
 import java.util.Currency;
+import java.util.Set;
 
 @Component
 public class ProveedorLogisticoHttpAdapter implements ProveedorLogisticoPort {
+
+    private static final Set<Integer> ESTADOS_TEMPORALES = Set.of(429, 502, 503, 504);
+    private static final BigDecimal COSTE_MAXIMO = new BigDecimal("9999999999.99"); // NUMERIC(12, 2) en BD
 
     private final RestClient restClient;
 
@@ -41,8 +45,8 @@ public class ProveedorLogisticoHttpAdapter implements ProveedorLogisticoPort {
                     .retrieve()
                     .onStatus(HttpStatusCode::isError, (peticion, res) -> {
                         int estado = res.getStatusCode().value();
-                        if (estado == 503) {
-                            throw new ProveedorNoDisponibleException("El proveedor respondió 503");
+                        if (ESTADOS_TEMPORALES.contains(estado)) {
+                            throw new ProveedorNoDisponibleException("El proveedor respondió " + estado);
                         }
                         throw new ProveedorLogisticoException("El proveedor respondió " + estado);
                     })
@@ -62,9 +66,12 @@ public class ProveedorLogisticoHttpAdapter implements ProveedorLogisticoPort {
         if (respuesta == null || respuesta.coste() == null || respuesta.moneda() == null) {
             throw new ProveedorLogisticoException("Respuesta del proveedor sin coste o sin moneda");
         }
+        if (respuesta.coste().compareTo(COSTE_MAXIMO) > 0) {
+            throw new ProveedorLogisticoException("Coste del proveedor fuera de rango: " + respuesta);
+        }
         try {
             return Dinero.of(respuesta.coste(), Currency.getInstance(respuesta.moneda()));
-        } catch (IllegalArgumentException e) {
+        } catch (IllegalArgumentException | ArithmeticException e) {
             throw new ProveedorLogisticoException("Respuesta del proveedor no válida: " + respuesta, e);
         }
     }

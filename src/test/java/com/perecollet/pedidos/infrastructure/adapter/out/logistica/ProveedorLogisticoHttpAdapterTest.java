@@ -10,6 +10,8 @@ import com.perecollet.pedidos.application.port.out.ProveedorLogisticoPort;
 import com.perecollet.pedidos.domain.model.Dinero;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -133,6 +135,17 @@ class ProveedorLogisticoHttpAdapterTest {
         verificarLlamadas(3);
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {429, 502, 504})
+    void givenProveedorRespondeEstadoTemporal_whenObtenerTarifa_thenReintentaYLanzaNoDisponible(int estado) {
+        wiremock.stubFor(post(TARIFAS).willReturn(aResponse().withStatus(estado)));
+
+        assertThatThrownBy(this::pedirTarifa)
+                .isExactlyInstanceOf(ProveedorNoDisponibleException.class);
+
+        verificarLlamadas(3);
+    }
+
     @Test
     void givenProveedorTardaMasQueElTimeout_whenObtenerTarifa_thenReintentaYLanzaTimeout() {
         wiremock.stubFor(post(TARIFAS).willReturn(okJson(RESPUESTA_OK).withFixedDelay(1_500)));
@@ -174,6 +187,40 @@ class ProveedorLogisticoHttpAdapterTest {
                 .isExactlyInstanceOf(ProveedorLogisticoException.class);
 
         verificarLlamadas(1);
+    }
+
+    @Test
+    void givenProveedorResponde500_whenObtenerTarifa_thenLanzaErrorSinReintentar() {
+        wiremock.stubFor(post(TARIFAS).willReturn(aResponse().withStatus(500)));
+
+        assertThatThrownBy(this::pedirTarifa)
+                .isExactlyInstanceOf(ProveedorLogisticoException.class);
+
+        verificarLlamadas(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"10000000000.00", "1E+2147483647", "1E-2147483647"})
+    void givenCosteNoRepresentable_whenObtenerTarifa_thenLanzaErrorSinReintentar(String coste) {
+        wiremock.stubFor(post(TARIFAS).willReturn(okJson("""
+                { "coste": %s, "moneda": "EUR", "plazoDias": 2 }
+                """.formatted(coste))));
+
+        assertThatThrownBy(this::pedirTarifa)
+                .isExactlyInstanceOf(ProveedorLogisticoException.class);
+
+        verificarLlamadas(1);
+    }
+
+    @Test
+    void givenCosteEnElLimiteDeLaColumna_whenObtenerTarifa_thenDevuelveElCoste() {
+        wiremock.stubFor(post(TARIFAS).willReturn(okJson("""
+                { "coste": 9999999999.99, "moneda": "EUR", "plazoDias": 2 }
+                """)));
+
+        Dinero tarifa = pedirTarifa();
+
+        assertThat(tarifa).isEqualTo(Dinero.euros(new BigDecimal("9999999999.99")));
     }
 
     @Test

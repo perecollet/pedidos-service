@@ -18,6 +18,7 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.client.RestClient;
@@ -69,7 +70,7 @@ class PedidoApiTest {
     static void propiedades(DynamicPropertyRegistry registro) {
         registro.add("proveedor-logistico.base-url", proveedor::baseUrl);
         registro.add("proveedor-logistico.token", () -> "token-de-prueba");
-        registro.add("proveedor-logistico.read-timeout", () -> "1s");
+        registro.add("proveedor-logistico.read-timeout", () -> "3s");
         registro.add("proveedor-logistico.reintentos.espera", () -> "10ms");
         registro.add("proveedor-logistico.reintentos.jitter", () -> "0ms");
     }
@@ -79,6 +80,9 @@ class PedidoApiTest {
 
     @Autowired
     private PedidoRepositoryPort pedidos;
+
+    @Autowired
+    private JdbcTemplate jdbc;
 
     private RestClient api;
 
@@ -193,6 +197,54 @@ class PedidoApiTest {
         assertThat(crear(cuerpo).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
+    @Test
+    void givenLineaNula_whenCrear_thenDevuelve400() {
+        String cuerpo = """
+                { "clienteId": "%s", "codigoPostalDestino": "43840", "lineas": [null] }
+                """.formatted(CLIENTE_ANA);
+
+        assertThat(crear(cuerpo).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1001, Integer.MAX_VALUE})
+    void givenCantidadPorEncimaDelMaximo_whenCrear_thenDevuelve400(int cantidad) {
+        String cuerpo = pedidoValido().replace("\"cantidad\": 2", "\"cantidad\": " + cantidad);
+
+        assertThat(crear(cuerpo).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void givenCantidadEnElMaximo_whenCrear_thenDevuelve201() {
+        // Teclado 49.99 x 1000 = 49990.00  +  Ratón 19.90 x 3 = 59.70
+        String cuerpo = pedidoValido().replace("\"cantidad\": 2", "\"cantidad\": 1000");
+
+        ResponseEntity<Map<String, Object>> respuesta = crear(cuerpo);
+
+        assertThat(respuesta.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(importe(respuesta.getBody(), "importeProductos")).isEqualByComparingTo("50049.70");
+    }
+
+    @Test
+    void givenCantidadDecimal_whenCrear_thenDevuelve400() {
+        String cuerpo = pedidoValido().replace("\"cantidad\": 2", "\"cantidad\": 2.5");
+
+        assertThat(crear(cuerpo).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void givenProductoDelCatalogoEnOtraMoneda_whenCrear_thenDevuelve422SinMencionarAlProveedor() {
+        String productoEnDolares = UUID.randomUUID().toString();
+        jdbc.update("INSERT INTO producto (id, nombre, precio, moneda, peso_kg) VALUES (?::uuid, 'En dólares', 10, 'USD', 1)",
+                productoEnDolares);
+        String cuerpo = pedidoValido().replace(RATON, productoEnDolares);
+
+        ResponseEntity<Map<String, Object>> respuesta = crear(cuerpo);
+
+        assertThat(respuesta.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
+        assertThat((String) respuesta.getBody().get("detail")).doesNotContain("proveedor");
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"4384", "438400", "12345678901", "4384a", "@@@@@", "     "})
     void givenCodigoPostalQueNoTieneCincoDigitos_whenCrear_thenDevuelve400(String codigoPostal) {
@@ -249,7 +301,7 @@ class PedidoApiTest {
 
     @Test
     void givenProveedorNoRespondeATiempo_whenConfirmar_thenDevuelve504YPedidoQuedaEnErrorEnvio() {
-        proveedor.stubFor(post(TARIFAS).willReturn(okJson(TARIFA_OK).withFixedDelay(2_000)));
+        proveedor.stubFor(post(TARIFAS).willReturn(okJson(TARIFA_OK).withFixedDelay(4_000)));
         String id = crearPedidoValido();
 
         ResponseEntity<Map<String, Object>> respuesta = confirmar(id);
@@ -285,6 +337,22 @@ class PedidoApiTest {
     }
 
     // --- Respuestas anómalas: el pedido no se queda bloqueado en CONFIRMANDO ---
+
+    @Test
+    void givenTarifaEnOtraMoneda_whenConfirmar_thenDevuelve502YSePuedeReintentar() {
+        proveedor.stubFor(post(TARIFAS).willReturn(okJson("""
+                { "coste": 7.95, "moneda": "USD", "plazoDias": 2 }
+                """)));
+        String id = crearPedidoValido();
+
+        ResponseEntity<Map<String, Object>> respuesta = confirmar(id);
+
+        assertThat(respuesta.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+        assertThat(estadoGuardado(id)).isEqualTo(EstadoPedido.ERROR_ENVIO);
+        proveedor.resetAll();
+        proveedor.stubFor(post(TARIFAS).willReturn(okJson(TARIFA_OK)));
+        assertThat(confirmar(id).getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
 
     @Test
     void givenCosteQueNoCabeEnLaColumna_whenConfirmar_thenDevuelve502YSePuedeReintentar() {
@@ -323,8 +391,8 @@ class PedidoApiTest {
 
     @Test
     void givenDosConfirmacionesSimultaneas_whenConfirmar_thenUnaLlamadaAlProveedorYUnConflicto() throws Exception {
-        // El proveedor tarda 300 ms: la segunda petición llega mientras la primera está esperando
-        proveedor.stubFor(post(TARIFAS).willReturn(okJson(TARIFA_OK).withFixedDelay(300)));
+        // El proveedor tarda 1 s: la segunda petición llega mientras la primera está esperando
+        proveedor.stubFor(post(TARIFAS).willReturn(okJson(TARIFA_OK).withFixedDelay(1_000)));
         String id = crearPedidoValido();
         CountDownLatch salida = new CountDownLatch(1);
         Callable<HttpStatus> confirmacion = () -> {

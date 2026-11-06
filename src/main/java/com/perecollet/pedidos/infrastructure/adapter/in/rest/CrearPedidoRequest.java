@@ -4,16 +4,16 @@ import com.perecollet.pedidos.application.port.in.CrearPedidoCommand;
 import com.perecollet.pedidos.domain.model.ClienteId;
 import com.perecollet.pedidos.domain.model.ProductoId;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 
 import java.util.List;
 import java.util.UUID;
 
 public record CrearPedidoRequest(@NotNull UUID clienteId,
-                                 @NotBlank String codigoPostalDestino,
+                                 @NotNull @Pattern(regexp = "\\d{5}") String codigoPostalDestino,
                                  @NotEmpty List<@Valid LineaRequest> lineas) {
 
     record LineaRequest(@NotNull UUID productoId, @Positive int cantidad) { }

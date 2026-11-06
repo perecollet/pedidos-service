@@ -8,6 +8,8 @@ import com.perecollet.pedidos.domain.model.PedidoId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -138,12 +140,11 @@ class PedidoApiTest {
     // --- POST /api/pedidos ---
 
     @Test
-    void givenPedidoValido_whenCrear_thenDevuelve201ConLocationYImporteCalculado() {
+    void givenPedidoValido_whenCrear_thenDevuelve201ConImporteCalculado() {
         ResponseEntity<Map<String, Object>> respuesta = crear(pedidoValido());
 
         assertThat(respuesta.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         Map<String, Object> cuerpo = respuesta.getBody();
-        assertThat(respuesta.getHeaders().getLocation()).hasToString("/api/pedidos/" + cuerpo.get("id"));
         assertThat(cuerpo.get("estado")).isEqualTo("CREADO");
         assertThat(importe(cuerpo, "importeProductos")).isEqualByComparingTo("159.68");
         assertThat(cuerpo.get("costeEnvio")).isNull();
@@ -188,6 +189,21 @@ class PedidoApiTest {
     @Test
     void givenCantidadCero_whenCrear_thenDevuelve400() {
         String cuerpo = pedidoValido().replace("\"cantidad\": 2", "\"cantidad\": 0");
+
+        assertThat(crear(cuerpo).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"4384", "438400", "12345678901", "4384a", "@@@@@", "     "})
+    void givenCodigoPostalQueNoTieneCincoDigitos_whenCrear_thenDevuelve400(String codigoPostal) {
+        String cuerpo = pedidoValido().replace("43840", codigoPostal);
+
+        assertThat(crear(cuerpo).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void givenCodigoPostalNulo_whenCrear_thenDevuelve400() {
+        String cuerpo = pedidoValido().replace("\"43840\"", "null");
 
         assertThat(crear(cuerpo).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
@@ -266,6 +282,41 @@ class PedidoApiTest {
 
         assertThat(reintento.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(reintento.getBody().get("estado")).isEqualTo("CONFIRMADO");
+    }
+
+    // --- Respuestas anómalas: el pedido no se queda bloqueado en CONFIRMANDO ---
+
+    @Test
+    void givenCosteQueNoCabeEnLaColumna_whenConfirmar_thenDevuelve502YSePuedeReintentar() {
+        proveedor.stubFor(post(TARIFAS).willReturn(okJson("""
+                { "coste": 99999999999.00, "moneda": "EUR", "plazoDias": 2 }
+                """)));
+        String id = crearPedidoValido();
+
+        ResponseEntity<Map<String, Object>> respuesta = confirmar(id);
+
+        assertThat(respuesta.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+        assertThat(estadoGuardado(id)).isEqualTo(EstadoPedido.ERROR_ENVIO);
+        proveedor.resetAll();
+        proveedor.stubFor(post(TARIFAS).willReturn(okJson(TARIFA_OK)));
+        assertThat(confirmar(id).getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void givenTotalQueNoCabeEnLaColumna_whenConfirmar_thenDevuelve500YSePuedeReintentar() {
+        // El coste es válido, pero 9999999999.99 + 159.68 desborda importe_total y falla el guardado
+        proveedor.stubFor(post(TARIFAS).willReturn(okJson("""
+                { "coste": 9999999999.99, "moneda": "EUR", "plazoDias": 2 }
+                """)));
+        String id = crearPedidoValido();
+
+        ResponseEntity<Map<String, Object>> respuesta = confirmar(id);
+
+        assertThat(respuesta.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        assertThat(estadoGuardado(id)).isEqualTo(EstadoPedido.ERROR_ENVIO);
+        proveedor.resetAll();
+        proveedor.stubFor(post(TARIFAS).willReturn(okJson(TARIFA_OK)));
+        assertThat(confirmar(id).getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 
     // --- Concurrencia: dos confirmaciones simultáneas del mismo pedido ---

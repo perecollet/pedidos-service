@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "/api/tarifas"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "coste": 7.95,
+      "moneda": "EUR",
+      "plazoDias": 2
+    }
+  }
+}

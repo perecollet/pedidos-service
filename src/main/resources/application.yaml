@@ -1,6 +1,13 @@
 spring:
   application:
     name: pedidos-service
+  datasource:
+    url: jdbc:postgresql://localhost:5432/pedidos
+    username: pedidos
+    password: pedidos
+  jackson:
+    deserialization:
+      accept-float-as-int: false
   jpa:
     hibernate:
       ddl-auto: validate

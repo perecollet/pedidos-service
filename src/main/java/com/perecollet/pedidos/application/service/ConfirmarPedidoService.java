@@ -2,9 +2,11 @@ package com.perecollet.pedidos.application.service;
 
 import com.perecollet.pedidos.application.exception.PedidoEnConfirmacionException;
 import com.perecollet.pedidos.application.exception.PedidoNoEncontradoException;
+import com.perecollet.pedidos.application.exception.ProveedorLogisticoException;
 import com.perecollet.pedidos.application.port.in.ConfirmarPedidoUseCase;
 import com.perecollet.pedidos.application.port.out.PedidoRepositoryPort;
 import com.perecollet.pedidos.application.port.out.ProveedorLogisticoPort;
+import com.perecollet.pedidos.domain.exception.MonedaNoCoincideException;
 import com.perecollet.pedidos.domain.model.Dinero;
 import com.perecollet.pedidos.domain.model.EstadoPedido;
 import com.perecollet.pedidos.domain.model.Pedido;
@@ -36,12 +38,21 @@ public class ConfirmarPedidoService implements ConfirmarPedidoUseCase {
                     pedido.pesoTotalKg(),
                     pedido.numBultos()
             );
-            pedido.confirmar(tarifa);
+            aplicarTarifa(pedido, tarifa);
             pedidoRepositoryPort.guardar(pedido);
             return pedido;
         } catch (RuntimeException e) {
             liberarReserva(id, e);
             throw e;
+        }
+    }
+
+    private static void aplicarTarifa(Pedido pedido, Dinero tarifa) {
+        try {
+            pedido.confirmar(tarifa);
+        } catch (MonedaNoCoincideException e) {
+            throw new ProveedorLogisticoException(
+                    "Tarifa del proveedor en moneda no admitida para el pedido %s".formatted(pedido.id().valor()), e);
         }
     }
 

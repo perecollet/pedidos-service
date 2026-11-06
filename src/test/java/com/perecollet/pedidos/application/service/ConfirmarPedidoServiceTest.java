@@ -207,13 +207,14 @@ class ConfirmarPedidoServiceTest {
     }
 
     @Test
-    void givenTarifaEnOtraMoneda_whenConfirmar_thenGuardaErrorEnvioYLanzaMonedaNoCoincide() {
+    void givenTarifaEnOtraMoneda_whenConfirmar_thenGuardaErrorEnvioYLanzaErrorDelProveedorConLaCausa() {
         dadoPedidoReservado();
         Dinero tarifaEnDolares = Dinero.of(new BigDecimal("7.95"), Currency.getInstance("USD"));
         when(proveedor.obtenerTarifa(anyString(), any(), anyInt())).thenReturn(tarifaEnDolares);
 
         assertThatThrownBy(() -> servicio.confirmar(PEDIDO_ID))
-                .isInstanceOf(MonedaNoCoincideException.class);
+                .isExactlyInstanceOf(ProveedorLogisticoException.class)
+                .hasCauseInstanceOf(MonedaNoCoincideException.class);
 
         Pedido guardado = pedidoGuardado();
         assertThat(guardado.estado()).isEqualTo(EstadoPedido.ERROR_ENVIO);

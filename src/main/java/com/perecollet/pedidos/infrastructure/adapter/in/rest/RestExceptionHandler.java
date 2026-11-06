@@ -27,7 +27,7 @@ public class RestExceptionHandler extends ResponseEntityExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
     }
 
-    @ExceptionHandler({ClienteNoEncontradoException.class, ProductoNoEncontradoException.class})
+    @ExceptionHandler({ClienteNoEncontradoException.class, ProductoNoEncontradoException.class, MonedaNoCoincideException.class})
     public ProblemDetail referenciaInvalida(RuntimeException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
     }
@@ -52,8 +52,8 @@ public class RestExceptionHandler extends ResponseEntityExceptionHandler {
 
     }
 
-    @ExceptionHandler({ProveedorLogisticoException.class, MonedaNoCoincideException.class})
-    public ProblemDetail proveedorError(RuntimeException e) {
+    @ExceptionHandler(ProveedorLogisticoException.class)
+    public ProblemDetail proveedorError(ProveedorLogisticoException e) {
         log.warn("Respuesta no válida del proveedor logístico", e);
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY,
                 "El proveedor logístico devolvió una respuesta no válida. El pedido ha quedado en ERROR_ENVIO y se puede volver a confirmar.");
